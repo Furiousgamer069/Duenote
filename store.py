@@ -54,11 +54,14 @@ class Store:
         return dict(row) if row else None
 
     def save_page(self, page_id, label, page_kind, mode, entries, evidence, written_total, revision):
-        """Store a confirmed page. Same image again -> no change (idempotent). Returns True if saved."""
+        """Store a confirmed page. Same image again -> no change (idempotent). Returns True if saved.
+
+        Unclear rows are kept as 'needs checking': stored with their raw text, never counted
+        until the owner fixes them with resolve_entry().
+        """
         if self.has_page(page_id):
             return False
-        if any(not e["resolved"] for e in entries):
-            raise ValueError("Resolve every row before confirming the page.")
+        pending = sum(not e["resolved"] for e in entries)
         with self.db:
             self.db.execute(
                 "INSERT INTO pages VALUES (?,?,?,?,?,?,?,?,?)",
@@ -66,8 +69,23 @@ class Store:
                  signature(entries), revision, _now()))
             for e in entries:
                 self._insert_entry(e, page_id)
-            self._event("page_confirmed", "", "", f"{len(entries)} rows", page_id)
+            note = f"{len(entries)} rows" + (f", {pending} need checking" if pending else "")
+            self._event("page_confirmed", "", "", note, page_id)
         return True
+
+    def resolve_entry(self, entry_id, name, amount_raw, kind):
+        """Owner fixes a 'needs checking' row. Only a fully valid row is saved."""
+        row = self.db.execute("SELECT * FROM entries WHERE id=?", (entry_id,)).fetchone()
+        if row is None:
+            raise ValueError("That row no longer exists.")
+        fixed = normalize_entry({**dict(row), "name": name, "amount_raw": amount_raw, "kind": kind}, default_id=entry_id)
+        if not fixed["resolved"]:
+            raise ValueError("Still unclear: " + "; ".join(fixed["reasons"]))
+        with self.db:
+            self.db.execute("UPDATE entries SET name=?, amount_raw=?, amount=?, kind=? WHERE id=?",
+                            (fixed["name"], fixed["amount_raw"], str(fixed["amount"]), fixed["kind"], entry_id))
+            self._event("row_fixed", fixed["name"], str(fixed["amount"]), f"row {fixed['row_ref']}", entry_id)
+        return fixed
 
     def pages(self):
         return [dict(r) for r in self.db.execute("SELECT * FROM pages ORDER BY confirmed_at")]

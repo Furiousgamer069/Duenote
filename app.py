@@ -98,11 +98,28 @@ def load_extraction(result, seconds=None):
 st.title("📒 DueNote")
 st.caption("Paper khata → checked ledger → respectful WhatsApp drafts → record payments")
 
-tab_capture, tab_review, tab_collect, tab_history = st.tabs(
-    ["1 · Capture · تصویر", "2 · Review · جانچ", "3 · Collect · وصولی", "4 · History · ریکارڈ"])
+STEPS = ["1 · Capture · تصویر", "2 · Review · جانچ", "3 · Collect · وصولی", "4 · History · ریکارڈ"]
+ss.setdefault("step", STEPS[0])
+
+
+def go(i):
+    ss.step = STEPS[i]  # runs as a button callback, before the step selector is drawn
+
+
+def nav(i):
+    """Back / Next buttons: you can always move to any step."""
+    st.divider()
+    b, n = st.columns(2)
+    if i > 0:
+        b.button(f"← {STEPS[i - 1]}", on_click=go, args=(i - 1,), width="stretch", key=f"back_{i}")
+    if i < len(STEPS) - 1:
+        n.button(f"{STEPS[i + 1]} →", on_click=go, args=(i + 1,), width="stretch", type="primary", key=f"next_{i}")
+
+
+step = st.radio("Step", STEPS, key="step", horizontal=True, label_visibility="collapsed")
 
 # ================= 1. CAPTURE =================
-with tab_capture:
+if step == STEPS[0]:
     st.subheader("Photograph a khata page")
     c1, c2 = st.columns(2)
     for col, key in ((c1, "roman"), (c2, "urdu")):
@@ -111,6 +128,7 @@ with tab_capture:
             data = open(os.path.join(ROOT, img_path), "rb").read()
             image, pid = images.load_photo(data)
             new_page(pid, image, f"Sample: {title}", is_demo=key)
+            ss.last_upload_id = None  # so uploading a photo again later still replaces the sample
     st.caption("Sample replay uses a manually verified transcription. **No AI call, no internet, no key.**")
 
     up_tab, cam_tab = st.tabs(["📁 Upload photo", "📷 Camera"])
@@ -178,10 +196,11 @@ with tab_capture:
             if page["entries"] is not None:
                 source = "Sample replay (verified demo data)" if page["is_demo"] and page["seconds"] is None \
                     else f"Live Gemma 4 read · {page['seconds']} s"
-                st.success(f"✅ {len(page['entries'])} amounts found · {source}\n\n➡️ Open **2 · Review**.")
+                st.success(f"✅ {len(page['entries'])} amounts found · {source}")
+    nav(0)
 
 # ================= 2. REVIEW =================
-with tab_review:
+if step == STEPS[1]:
     page = ss.page
     if not page or page["entries"] is None:
         st.info("Capture and read a page first.")
@@ -227,24 +246,31 @@ with tab_review:
             st.success("✅ Balances and total written on the page match Python's calculation.")
 
         if unresolved:
-            st.error(f"🟠 {len(unresolved)} row(s) need checking before you can confirm:\n\n" + "\n".join(
-                f"- Row {e['row_ref']} ({e['name'] or '?'}): {'; '.join(e['reasons'])}" for e in unresolved))
-        elif store.has_page(page["page_id"]):
+            st.warning(f"🟠 {len(unresolved)} row(s) need checking. Fix them above now, or confirm anyway: "
+                       "they'll be kept as **Needs checking**, not counted, and you can fix them in Collect.\n\n"
+                       + "\n".join(f"- Row {e['row_ref']} ({e['name'] or '?'}): {'; '.join(e['reasons'])}"
+                                   for e in unresolved))
+        if store.has_page(page["page_id"]):
             st.info("This exact photo is already confirmed in your ledger (no double counting).")
         else:
             similar = store.similar_page(provisional)
             if similar:
                 st.warning(f"⚠️ This looks like the same page as '{similar['label']}' already in your ledger. "
                            "Confirm only if it's really a different page.")
-            if st.button("✅ Confirm page into ledger · کھاتے میں شامل کریں", type="primary", width="stretch"):
+
+            def confirm_page(page=page, rows=provisional):
                 store.save_page(page["page_id"], page["label"], (page["result"] or {}).get("page_kind"), mode,
-                                provisional, page["evidence"], (page["result"] or {}).get("written_total"),
-                                revision(provisional))
-                st.success("Confirmed. ➡️ Open **3 · Collect**.")
-                st.rerun()
+                                rows, page["evidence"], (page["result"] or {}).get("written_total"), revision(rows))
+                go(2)  # straight to Collect
+
+            label = "✅ Confirm page into ledger · کھاتے میں شامل کریں"
+            if unresolved:
+                label = f"✅ Confirm {len(provisional) - len(unresolved)} clear rows · keep {len(unresolved)} for checking"
+            st.button(label, type="primary", width="stretch", on_click=confirm_page)
+    nav(1)
 
 # ================= 3. COLLECT =================
-with tab_collect:
+if step == STEPS[2]:
     entries = store.entries()
     aliases = store.aliases()
     balances = compute_balances(entries, aliases)
@@ -252,10 +278,38 @@ with tab_collect:
     if not balances:
         st.info("Confirm a page in Review to build the ledger.")
     else:
-        m1, m2, m3 = st.columns(3)
+        pending = [e for e in entries if not e["resolved"]]
+        m1, m2, m3, m4 = st.columns(4)
         m1.metric("Total to collect", f"Rs. {format_rs(total_due(balances))}")
         m2.metric("Customers who owe", sum(c["state"] == "due" for c in balances.values()))
         m3.metric("Settled / credit", sum(c["state"] in ("settled", "credit") for c in balances.values()))
+        m4.metric("Rows to check", len(pending))
+        if pending:
+            st.caption("🟠 Rows that need checking are **not counted** in any total, and those customers "
+                       "get no reminder until you fix them.")
+
+        def fix_form(e):
+            """Owner fixes a pending row; it only counts once it's clear."""
+            with st.form(f"fix_{e['id']}"):
+                st.markdown(f"🟠 **Fix row {e['row_ref']}**: written `{e['original_text'] or e['amount_raw']}` · "
+                            f"{'; '.join(e['reasons'])}")
+                f1, f2, f3 = st.columns([3, 2, 2])
+                name_in = f1.text_input("Name", e["name"])
+                amount_in = f2.text_input("Amount (Rs.)", e["amount_raw"])
+                kind_in = f3.selectbox("Direction", ["owed", "paid"],
+                                       index=1 if e["kind"] == "paid" else 0)
+                if st.form_submit_button("✔️ Save fix", width="stretch"):
+                    try:
+                        store.resolve_entry(e["id"], name_in, amount_in, kind_in)
+                        st.rerun()
+                    except ValueError as err:
+                        st.error(str(err))
+
+        nameless = [e for e in pending if not e["name"]]
+        if nameless:
+            with st.expander(f"🟠 {len(nameless)} row(s) with no name", expanded=True):
+                for e in nameless:
+                    fix_form(e)
 
         for a, b in suggest_aliases([e["name"] for e in entries], aliases):
             col_t, col_b = st.columns([4, 1])
@@ -274,6 +328,9 @@ with tab_collect:
                                             "Amount": format_rs(e["amount"]) if e["amount"] is not None else "?",
                                             "Source": e["source"]} for e in st_rows]),
                              hide_index=True, width="stretch")
+                for e in st_rows:
+                    if not e["resolved"]:
+                        fix_form(e)
 
                 with st.form(f"pay_{cid}", clear_on_submit=True):
                     st.markdown("**Record payment · وصولی درج کریں**")
@@ -321,9 +378,10 @@ with tab_collect:
                         st.link_button(label, reminders.whatsapp_url(number, text), width="stretch")
                         st.caption("This only opens WhatsApp with the draft. You send it yourself; "
                                    "it doesn't mean the message was delivered or paid.")
+    nav(2)
 
 # ================= 4. HISTORY =================
-with tab_history:
+if step == STEPS[3]:
     st.subheader("Ledger history")
     pages, events = store.pages(), store.events()
     if pages:
@@ -356,6 +414,7 @@ with tab_history:
         store.clear()
         ss.page, ss.drafts, ss.read_cache = None, {}, {}
         st.rerun()
+    nav(3)
 
 if show_debug:
     with st.sidebar:

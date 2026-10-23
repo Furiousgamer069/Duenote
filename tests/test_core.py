@@ -119,10 +119,18 @@ def test_duplicate_import_idempotent_and_rephotograph_warned():
     assert store.similar_page(entries)["id"] == "p1"  # same content, different photo -> warn
 
 
-def test_unresolved_page_cannot_be_confirmed():
+def test_unclear_rows_are_kept_pending_not_counted_then_fixed():
+    store = Store()
+    rows = [normalize_entry({"id": "1", "name": "A", "amount": "100", "kind": "owed"}),
+            normalize_entry({"id": "2", "name": "Hina", "amount": "[unreadable]", "kind": ""})]
+    assert store.save_page("p", "x", "transactions", "shop", rows, {}, None, "r")
+    b = compute_balances(store.entries())
+    assert total_due(b) == 100 and b["hina"]["state"] == "needs checking"
     with pytest.raises(ValueError):
-        Store().save_page("p", "x", "transactions", "shop",
-                          [normalize_entry({"name": "A", "amount": "?", "kind": "owed"})], {}, None, "r")
+        store.resolve_entry("2", "Hina", "still ??", "owed")  # invalid fix is refused
+    store.resolve_entry("2", "Hina", "۷۵۰", "owed")
+    b = compute_balances(store.entries())
+    assert b["hina"]["balance"] == 750 and b["hina"]["state"] == "due" and total_due(b) == 850
 
 
 # ---------- identity ----------
