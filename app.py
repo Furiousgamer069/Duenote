@@ -2,6 +2,7 @@
 
 Run:  .venv/Scripts/streamlit.exe run app.py
 """
+import io
 import os
 import re
 import urllib.parse
@@ -11,7 +12,7 @@ from PIL import Image
 
 import khata
 
-SAMPLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "samples", "khata_sample.png")
+SAMPLES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "samples")
 
 st.set_page_config(page_title="DueNote", page_icon="📒", layout="centered")
 
@@ -40,6 +41,23 @@ def whatsapp_link(phone, text):
     return f"https://wa.me/{digits}?text={urllib.parse.quote(text)}"
 
 
+# Cache results: reading the same photo again is instant while the app is running
+@st.cache_data(show_spinner=False)
+def read_cached(image_bytes, mode):
+    return khata.read_notebook(Image.open(io.BytesIO(image_bytes)).convert("RGB"), mode)
+
+
+@st.cache_data(show_spinner=False)
+def reminders_cached(balances, business, mode):
+    return khata.write_reminders(balances, business, mode)
+
+
+def to_bytes(image):
+    buffer = io.BytesIO()
+    image.convert("RGB").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 # ---------- Step 1: get the photo ----------
 st.subheader("1. Snap your notebook")
 tab_upload, tab_camera = st.tabs(["📁 Upload photo", "📷 Use camera"])
@@ -48,8 +66,11 @@ with tab_upload:
 with tab_camera:
     snapped = st.camera_input("Take a photo", label_visibility="collapsed")
 
-if st.button("✨ Try with a sample page"):
-    st.session_state.photo = Image.open(SAMPLE)
+col_a, col_b = st.columns(2)
+if col_a.button("✨ Sample: Roman Urdu page", width="stretch"):
+    st.session_state.photo = Image.open(os.path.join(SAMPLES, "khata_sample.png"))
+if col_b.button("✨ Sample: Urdu table", width="stretch"):
+    st.session_state.photo = Image.open(os.path.join(SAMPLES, "real_page.png"))
 if uploaded or snapped:
     st.session_state.photo = Image.open(uploaded or snapped)
 
@@ -57,9 +78,9 @@ photo = st.session_state.get("photo")
 if photo is not None:
     st.image(photo, caption="Your notebook page", width="stretch")
     if st.button("🔍 Read my notebook", type="primary", width="stretch"):
-        with st.spinner("Gemma 4 is reading the handwriting... (about 30–60 seconds)"):
+        with st.spinner("Gemma 4 is reading the handwriting... (can take 1–2 minutes)"):
             try:
-                st.session_state.entries = khata.read_notebook(photo.convert("RGB"), mode)
+                st.session_state.entries = read_cached(to_bytes(photo), mode)
                 st.session_state.pop("reminders", None)
             except Exception as e:
                 st.error(f"Couldn't read the page: {e}")
@@ -106,7 +127,7 @@ if "entries" in st.session_state:
     elif st.button("💬 Write reminders", type="primary", width="stretch"):
         with st.spinner("Gemma 4 is writing polite reminders..."):
             try:
-                st.session_state.reminders = khata.write_reminders(balances, business, mode)
+                st.session_state.reminders = reminders_cached(balances, business, mode)
                 for k in [k for k in st.session_state if k.startswith("lang_")]:
                     del st.session_state[k]  # fresh messages replace any old edits
             except Exception as e:

@@ -55,7 +55,13 @@ Read EVERY entry and return ONLY a JSON list, no other text. Each item:
   "amount": number in rupees, "type": "owed" or "paid"}}
 
 Use "paid" when money was paid back (e.g. "wapis diye", "paid", "clear", "jama", "ada").
-Otherwise use "owed". Skip titles and headings. Do NOT calculate totals."""
+Otherwise use "owed". Skip titles, headings and grand totals. Do NOT calculate anything.
+
+If the page is a summary TABLE with columns like total owed (کل ادھار / total), received
+(وصول / paid) and remaining (باقی / balance), make TWO items per row: one "owed" item with
+the total amount and one "paid" item with the received amount (skip it if received is 0).
+Ignore the remaining/balance column, the app calculates it.
+Write names in English letters (e.g. احمد علی -> Ahmad Ali)."""
     rows = parse_json(ask_gemma([prompt, image]))
     df = pd.DataFrame(rows, columns=["date", "name", "details", "amount", "type"])
     df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
