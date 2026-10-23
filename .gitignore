@@ -1,8 +1,13 @@
 # Secrets: never commit your real API key
 .env
 
+# Real shop data stays on this computer
+data/
+
 # Virtual environment (recreate with: pip install -r requirements.txt)
 .venv/
 
 __pycache__/
 *.pyc
+.pytest_cache/
+eval/results/
