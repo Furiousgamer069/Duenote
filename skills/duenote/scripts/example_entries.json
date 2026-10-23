@@ -1,0 +1,8 @@
+[
+  {"date": "12/10", "name": "Ali bhai", "details": "cheeni 5kg", "amount": 900, "type": "owed"},
+  {"date": "14/10", "name": "Bilal", "details": "doodh, anday", "amount": 650, "type": "owed"},
+  {"date": "15/10", "name": "Ali bhai", "details": "wapis diye", "amount": 500, "type": "paid"},
+  {"date": "18/10", "name": "Usman", "details": "aata 20kg", "amount": 2400, "type": "owed"},
+  {"date": "20/10", "name": "Bilal", "details": "clear", "amount": 650, "type": "paid"},
+  {"date": "21/10", "name": "Usman", "details": "ghee", "amount": "1,150", "type": "owed"}
+]

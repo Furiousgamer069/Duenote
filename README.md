@@ -29,6 +29,18 @@ Photo ──► Gemma 4 (vision) ──► entries table ──► owner edits �
 - `app.py`: the Streamlit interface
 - **Reliability**: if Google's servers are busy, DueNote retries and automatically switches between Gemma 4 models (`gemma-4-26b-a4b-it` → `gemma-4-31b-it`)
 
+## 🧩 Agent skill: use DueNote inside any AI agent
+
+DueNote also ships as an open **Agent Skill** following the `SKILL.md` standard: [`skills/duenote/SKILL.md`](skills/duenote/SKILL.md).
+
+Drop the `skills/duenote` folder into any skill-compatible agent (Claude, Hermes Agent and others). The agent can then read a notebook photo, calculate balances, and draft Urdu WhatsApp reminders, following the same rule as the app: **the agent reads and writes, a script calculates.**
+
+```bash
+python skills/duenote/scripts/balances.py skills/duenote/scripts/example_entries.json
+```
+
+`balances.py` uses only the Python standard library, so it runs anywhere with no installs.
+
 ## Run it
 
 ```bash
