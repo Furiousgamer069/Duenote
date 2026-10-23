@@ -1,0 +1,8 @@
+# Secrets: never commit your real API key
+.env
+
+# Virtual environment (recreate with: pip install -r requirements.txt)
+.venv/
+
+__pycache__/
+*.pyc
