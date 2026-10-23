@@ -1,0 +1,13 @@
+{
+  "_note": "Demo data. Manually verified transcription of samples/real_page.png (a sample page, not a real shop's records). Used for Sample replay (no AI call).",
+  "image": "samples/real_page.png",
+  "page_kind": "summary",
+  "written_total": "14700",
+  "rows": [
+    {"row_ref": "1", "original_text": "احمد علی | 12000 | 5000 | 7000 | 20/10/2026 | باقی", "name": "احمد علی", "name_latin": "Ahmad Ali", "date": "20/10/2026", "details": "باقی", "owed": "12000", "paid": "5000", "unclear_amount": null, "written_balance": "7000"},
+    {"row_ref": "2", "original_text": "عائشہ | 4500 | 2000 | 2500 | 21/10/2026 | باقی", "name": "عائشہ", "name_latin": "Ayesha", "date": "21/10/2026", "details": "باقی", "owed": "4500", "paid": "2000", "unclear_amount": null, "written_balance": "2500"},
+    {"row_ref": "3", "original_text": "بلال خان | 3000 | 3000 | 0 | 22/10/2026 | ادا شدہ", "name": "بلال خان", "name_latin": "Bilal Khan", "date": "22/10/2026", "details": "ادا شدہ", "owed": "3000", "paid": "3000", "unclear_amount": null, "written_balance": "0"},
+    {"row_ref": "4", "original_text": "سارہ | 1200 | 0 | 1200 | 22/10/2026 | باقی", "name": "سارہ", "name_latin": "Sara", "date": "22/10/2026", "details": "باقی", "owed": "1200", "paid": "0", "unclear_amount": null, "written_balance": "1200"},
+    {"row_ref": "5", "original_text": "عثمان | 6000 | 2000 | 4000 | 25/10/2026 | باقی", "name": "عثمان", "name_latin": "Usman", "date": "25/10/2026", "details": "باقی", "owed": "6000", "paid": "2000", "unclear_amount": null, "written_balance": "4000"}
+  ]
+}

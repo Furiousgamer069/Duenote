@@ -1,0 +1,14 @@
+{
+  "_note": "Synthetic demo data. Manually verified transcription of samples/khata_sample.png. Used for Sample replay (no AI call).",
+  "image": "samples/khata_sample.png",
+  "page_kind": "transactions",
+  "written_total": null,
+  "rows": [
+    {"row_ref": "1", "original_text": "12/10  Ali bhai - cheeni 5kg   900", "name": "Ali bhai", "name_latin": "Ali bhai", "date": "12/10", "details": "cheeni 5kg", "owed": "900", "paid": null, "unclear_amount": null, "written_balance": null},
+    {"row_ref": "2", "original_text": "14/10  Bilal - doodh, anday   650", "name": "Bilal", "name_latin": "Bilal", "date": "14/10", "details": "doodh, anday", "owed": "650", "paid": null, "unclear_amount": null, "written_balance": null},
+    {"row_ref": "3", "original_text": "15/10  Ali bhai - 500 wapis diye", "name": "Ali bhai", "name_latin": "Ali bhai", "date": "15/10", "details": "wapis diye", "owed": null, "paid": "500", "unclear_amount": null, "written_balance": null},
+    {"row_ref": "4", "original_text": "18/10  Usman - aata 20kg   2400", "name": "Usman", "name_latin": "Usman", "date": "18/10", "details": "aata 20kg", "owed": "2400", "paid": null, "unclear_amount": null, "written_balance": null},
+    {"row_ref": "5", "original_text": "20/10  Bilal - 650 clear", "name": "Bilal", "name_latin": "Bilal", "date": "20/10", "details": "clear", "owed": null, "paid": "650", "unclear_amount": null, "written_balance": null},
+    {"row_ref": "6", "original_text": "21/10  Usman - ghee   1150", "name": "Usman", "name_latin": "Usman", "date": "21/10", "details": "ghee", "owed": "1150", "paid": null, "unclear_amount": null, "written_balance": null}
+  ]
+}
