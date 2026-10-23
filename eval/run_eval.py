@@ -52,7 +52,7 @@ def score(expected, got):
 def main():
     replay = "--replay" in sys.argv
     load_dotenv(os.path.join(ROOT, ".env"))
-    provider = None if replay else GemmaProvider(overall_budget_s=300)
+    provider = None if replay else GemmaProvider(overall_budget_s=300, race=True, max_attempts=6)  # as in app
     report = {"mode": "replay (pipeline check, not a model measurement)" if replay else "live",
               "when": datetime.now().isoformat(timespec="seconds"), "pages": []}
     for label_path in LABELS:

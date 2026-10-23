@@ -75,12 +75,17 @@ else:
 
 @st.cache_resource
 def get_provider():
-    return GemmaProvider()
+    # Ask both Gemma 4 models at once (first good answer wins); 6 tries each because Google's
+    # free tier often returns quick 500s under load that succeed on a later try.
+    return GemmaProvider(race=True, max_attempts=6)
+
+
+READ_CACHE_SIZE = 8  # finished reads remembered per browser session (private, bounded)
 
 
 def new_page(page_id, image, label, is_demo):
     """Any new photo fully replaces the previous capture, so old results can't leak onto it."""
-    ss.page = {"page_id": page_id, "image": image, "label": label, "is_demo": is_demo,
+    ss.page = {"page_id": page_id, "image": image, "label": label, "is_demo": is_demo, "rotation": 0,
                "result": None, "entries": None, "evidence": {}, "error": None, "seconds": None}
 
 
@@ -136,6 +141,7 @@ with tab_capture:
             for col, deg, label in ((r1, -90, "↺ Rotate left"), (r2, 90, "↻ Rotate right")):
                 if col.button(label, width="stretch"):
                     page["image"] = images.rotate(page["image"], deg)
+                    page["rotation"] = (page["rotation"] + deg) % 360
                     page.update(result=None, entries=None, evidence={}, error=None)  # re-read after rotation
                     st.rerun()
             if page["is_demo"]:
@@ -145,10 +151,20 @@ with tab_capture:
             if st.button("🤖 Read with Gemma 4 (live AI)", type="secondary" if page["is_demo"] else "primary",
                          width="stretch"):
                 started = time.monotonic()
+                cache = ss.setdefault("read_cache", {})
+                cache_key = f"{page['page_id']}:{page['rotation']}:{mode}"
                 with st.status("Reading with Gemma 4 (live)…", expanded=True) as status:
-                    st.write("Sending the photo to the model. This can take 1–3 minutes.")
                     try:
-                        result = extract_page(get_provider(), images.for_model(page["image"]), mode)
+                        if cache_key in cache:
+                            result = cache[cache_key]
+                            st.write("Already read in this session. Reusing that result.")
+                        else:
+                            st.write("Asking both Gemma 4 models at once; the first good answer wins. "
+                                     "Usually about 1 minute, longer when Google's servers are busy.")
+                            result = extract_page(get_provider(), images.for_model(page["image"]), mode)
+                            cache[cache_key] = result
+                            while len(cache) > READ_CACHE_SIZE:
+                                cache.pop(next(iter(cache)))  # drop the oldest
                         load_extraction(result, round(time.monotonic() - started))
                         status.update(label=f"Read in {page['seconds']} s", state="complete")
                     except ProviderError as e:
@@ -338,7 +354,7 @@ with tab_history:
     st.divider()
     if st.button("🗑️ Clear data in this mode", type="secondary"):
         store.clear()
-        ss.page, ss.drafts = None, {}
+        ss.page, ss.drafts, ss.read_cache = None, {}, {}
         st.rerun()
 
 if show_debug:

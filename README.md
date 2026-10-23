@@ -74,6 +74,19 @@ Measured on 23 Oct 2026, one run, model `gemma-4-26b-a4b-it`, compared against t
 
 On the Urdu page, names in Urdu script matched exactly. Two English transliterations differed from our labels (e.g. *Aisha* vs *Ayesha*), which is why identity uses the original script. Latency includes retries while Google's servers were busy.
 
+### Speed work (measured, same day)
+
+Token counts showed the image is cheap (~620 input tokens). The time goes on Gemma 4's hidden **thinking** (~4,000 tokens) before a ~760-token answer. The Gemini API rejects `thinking_budget` and `thinking_level` for Gemma, so we:
+
+1. added a "simple copying task, answer directly" instruction to the prompt (Urdu page: thinking 4,008 → 2,478 tokens, **107 s → 75 s**, same correct result);
+2. ask **both Gemma 4 models at once** and use the first valid answer, with more patient retries on Google's quick 500 errors;
+3. remember finished reads per session, so re-reading the same photo is instant.
+
+| After the changes | Time | Result |
+|---|---|---|
+| Urdu table | 66 s (was 180 s) | 9/9 amounts, 5/5 balances |
+| Roman Urdu page | 55 s, during heavy server errors | 3/3 balances, Rs. 3,950 |
+
 Reproduce: `python eval/run_eval.py` (live) · `python eval/run_eval.py --replay` (pipeline check only). Two pages is a tiny sample, so these numbers show the method, not general accuracy.
 
 ## Architecture

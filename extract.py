@@ -40,7 +40,12 @@ Rules:
 - Summary tables (columns like کل ادھار total, وصول received, باقی remaining): put total in owed,
   received in paid, remaining in written_balance. Never put a remaining balance in owed.
 - If unsure whether an amount is owed or paid, use unclear_amount. If unreadable, copy what you see.
-- Skip headings. Put the page's grand total only in written_total."""
+- Skip headings. Put the page's grand total only in written_total.
+
+This is a simple copying task. Do not reason step by step, do not double-check, do not think
+at length. Output the JSON immediately."""
+# The last paragraph is a measured speedup: on the Urdu sample it cut Gemma 4's hidden thinking
+# from ~4,000 to ~2,500 tokens (107 s -> 75 s) with the same, fully correct result.
 
 
 def _json_part(text):

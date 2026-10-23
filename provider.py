@@ -5,6 +5,7 @@ listed by the Gemini API models endpoint for this project's key.
 """
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 DEFAULT_MODELS = ["gemma-4-26b-a4b-it", "gemma-4-31b-it"]
 
@@ -34,13 +35,15 @@ class ProviderError(Exception):
 
 
 class GemmaProvider:
-    def __init__(self, api_key=None, models=None, request_timeout_s=90, overall_budget_s=240, max_attempts=4):
+    def __init__(self, api_key=None, models=None, request_timeout_s=150, overall_budget_s=240, max_attempts=4,
+                 race=False):
         self._api_key = api_key
         env_models = [m.strip() for m in os.getenv("GEMMA_MODELS", "").split(",") if m.strip()]
         self.models = models or env_models or ([os.getenv("GEMMA_MODEL")] if os.getenv("GEMMA_MODEL") else []) or DEFAULT_MODELS
         self.request_timeout_s = request_timeout_s
         self.overall_budget_s = overall_budget_s
         self.max_attempts = max_attempts
+        self.race = race
         self._client = None
         self.last_model = None
 
@@ -80,12 +83,39 @@ class GemmaProvider:
         return ProviderError("server", type(exc).__name__)
 
     def generate(self, contents):
-        """Return model text. Retries server/timeout/429 across models within the time budget."""
+        """Return model text. Retries server/timeout/429 within the time budget.
+
+        With race=True and several models, all models are asked at once and the first good
+        answer wins (measured: busy-server errors on one model often don't hit the other).
+        """
         client = self._get_client()
         deadline = time.monotonic() + self.overall_budget_s
+        if self.race and len(self.models) > 1:
+            return self._race(client, contents, deadline)
+        return self._attempts(client, contents, self.models, deadline)
+
+    def _race(self, client, contents, deadline):
+        pool = ThreadPoolExecutor(max_workers=len(self.models))
+        futures = [pool.submit(self._attempts, client, contents, [m], deadline) for m in self.models]
+        errors_seen = []
+        try:
+            for future in as_completed(futures):
+                try:
+                    return future.result()
+                except ProviderError as e:
+                    if e.kind in ("auth", "missing_key"):
+                        raise
+                    errors_seen.append(e)
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)  # the slower model finishes in the background
+        # prefer the most informative error (e.g. rate_limit over a generic server error)
+        order = ["rate_limit", "bad_model", "timeout", "network", "empty", "budget", "server"]
+        raise min(errors_seen, key=lambda e: order.index(e.kind) if e.kind in order else len(order))
+
+    def _attempts(self, client, contents, models, deadline):
         last = None
         for attempt in range(self.max_attempts):
-            model = self.models[attempt % len(self.models)]
+            model = models[attempt % len(models)]
             try:
                 response = client.models.generate_content(model=model, contents=contents)
                 text = (getattr(response, "text", None) or "").strip()
@@ -99,7 +129,7 @@ class GemmaProvider:
                 last = self._classify(e)
                 if last.kind in ("auth", "missing_key"):
                     raise last
-                if last.kind == "bad_model" and len(self.models) == 1:
+                if last.kind == "bad_model" and len(models) == 1:
                     raise last
             is_last_try = attempt == self.max_attempts - 1
             wait = min(2 ** attempt, 8)

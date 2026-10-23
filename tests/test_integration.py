@@ -139,6 +139,39 @@ def test_retries_server_errors_then_succeeds_without_final_sleep(monkeypatch):
     assert e.value.kind == "server" and len(sleeps) == p.max_attempts - 1  # no sleep after last try
 
 
+def test_race_returns_the_model_that_answers_while_the_other_is_busy(monkeypatch):
+    from google.genai import errors
+    monkeypatch.setattr(provider_mod.time, "sleep", lambda s: None)
+
+    class Client:
+        class models:
+            @staticmethod
+            def generate_content(model, contents):
+                if model == "busy":
+                    raise errors.ServerError(503, {"error": {"code": 503, "message": "busy", "status": "UNAVAILABLE"}})
+                return type("R", (), {"text": f"answer from {model}"})()
+
+    p = GemmaProvider(api_key="k", models=["busy", "ok"], race=True)
+    p._client = Client()
+    assert p.generate(["x"]) == "answer from ok" and p.last_model == "ok"
+
+
+def test_race_reports_rate_limit_when_all_fail(monkeypatch):
+    from google.genai import errors
+    monkeypatch.setattr(provider_mod.time, "sleep", lambda s: None)
+
+    def fail(model, contents):
+        if model == "a":
+            raise errors.ClientError(429, {"error": {"code": 429, "message": "slow down", "status": "RESOURCE_EXHAUSTED"}})
+        raise errors.ServerError(500, {"error": {"code": 500, "message": "x", "status": "INTERNAL"}})
+
+    p = GemmaProvider(api_key="k", models=["a", "b"], race=True, max_attempts=2)
+    p._client = type("C", (), {"models": type("M", (), {"generate_content": staticmethod(fail)})})()
+    with pytest.raises(ProviderError) as e:
+        p.generate(["x"])
+    assert e.value.kind == "rate_limit"
+
+
 def test_empty_output_is_an_error():
     p = GemmaProvider(api_key="k", models=["a"], max_attempts=1)
     p._client = type("C", (), {"models": type("M", (), {"generate_content": staticmethod(
