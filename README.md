@@ -65,7 +65,14 @@ Live model check (uses your key): `python live_smoke_check.py`
 
 ## Measured live extraction (Gemma 4, 2 sample pages)
 
-MEASURED_RESULTS_PLACEHOLDER
+Measured on 23 Oct 2026, one run, model `gemma-4-26b-a4b-it`, compared against the manually verified fixtures:
+
+| Page | Amounts found (exact name + type + amount) | Omitted / added rows | Unresolved | Balances exact | Correction edits | Latency |
+|---|---|---|---|---|---|---|
+| Roman Urdu (typed handwriting font) | 6 / 6 | 0 / 0 | 0 | 3 / 3 | 0 | 46.5 s |
+| Urdu summary table (sample image) | 9 / 9 | 0 / 0 | 0 | 5 / 5 | 0 | 180.0 s |
+
+On the Urdu page, names in Urdu script matched exactly. Two English transliterations differed from our labels (e.g. *Aisha* vs *Ayesha*), which is why identity uses the original script. Latency includes retries while Google's servers were busy.
 
 Reproduce: `python eval/run_eval.py` (live) · `python eval/run_eval.py --replay` (pipeline check only). Two pages is a tiny sample, so these numbers show the method, not general accuracy.
 
