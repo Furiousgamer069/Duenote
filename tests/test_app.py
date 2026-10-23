@@ -184,6 +184,45 @@ def test_confirmed_page_review_is_locked():
     assert not any("Confirm" in b.label for b in at.button)
 
 
+def _page(pid, label, rows=None):
+    page = {"page_id": pid, "image": Image.new("RGB", (40, 40), "white"), "label": label, "is_demo": None,
+            "rotation": 0, "result": None, "entries": None, "evidence": {}, "error": None, "seconds": None}
+    if rows is not None:
+        result = {"rows": rows}
+        page["result"] = result
+        page["entries"], page["evidence"] = rows_to_entries(pid, result)
+        page["seconds"] = 1
+    return page
+
+
+def test_multiple_pages_reviewed_one_after_another():
+    at = new_app()
+    p1 = _page("p-1", "page1.jpg", [{"row_ref": "1", "name": "Ali", "owed": "900"}])
+    p2 = _page("p-2", "page2.jpg", [{"row_ref": "1", "name": "Sara", "owed": "1,200"},
+                                     {"row_ref": "2", "name": "Ali", "paid": "400"}])
+    at.session_state["batch"] = {"p-1": p1, "p-2": p2}
+    at.session_state["page"] = p1
+    goto(at, 2)
+    button(at, "Confirm").click().run()
+    assert "Review" in next(r for r in at.radio if r.label == "Step").value   # moved on to page 2
+    assert at.session_state.page["page_id"] == "p-2"
+    assert any("Next: page2.jpg" in s.value for s in at.success)
+    button(at, "Confirm").click().run()
+    assert "Collect" in next(r for r in at.radio if r.label == "Step").value   # all done -> Collect
+    assert metric(at, "Total to collect") == "Rs. 1,700"   # Ali 900-400 + Sara 1,200, across both pages
+    assert not at.exception
+
+
+def test_read_all_without_key_fails_cleanly_per_page():
+    at = new_app()
+    at.session_state["batch"] = {"p-1": _page("p-1", "a.jpg"), "p-2": _page("p-2", "b.jpg")}
+    at.session_state["page"] = at.session_state["batch"]["p-1"]
+    at.run()
+    button(at, "Read all 2 pages").click().run()
+    assert not at.exception
+    assert all("API key" in p["error"] for p in at.session_state.batch.values())
+
+
 def test_new_photo_clears_old_results():
     at = new_app()
     button(at, "Sample replay: Roman Urdu page").click().run()

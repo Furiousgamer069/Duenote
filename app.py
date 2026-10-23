@@ -83,16 +83,68 @@ def get_provider():
 READ_CACHE_SIZE = 8  # finished reads remembered per browser session (private, bounded)
 
 
-def new_page(page_id, image, label, is_demo):
-    """Any new photo fully replaces the previous capture, so old results can't leak onto it."""
-    ss.page = {"page_id": page_id, "image": image, "label": label, "is_demo": is_demo, "rotation": 0,
-               "result": None, "entries": None, "evidence": {}, "error": None, "seconds": None}
+MAX_BATCH = 10  # photos per upload batch
+ss.setdefault("batch", {})  # page_id -> page, for multi-photo uploads (this session only)
 
 
-def load_extraction(result, seconds=None):
-    page = ss.page
+def new_page(page_id, image, label, is_demo, select=True):
+    """Each photo gets its own page record, so one page's results can never leak onto another."""
+    page = {"page_id": page_id, "image": image, "label": label, "is_demo": is_demo, "rotation": 0,
+            "result": None, "entries": None, "evidence": {}, "error": None, "seconds": None}
+    if select:
+        ss.page = page
+    return page
+
+
+def load_extraction(result, seconds=None, page=None):
+    page = page or ss.page
     entries, evidence = rows_to_entries(page["page_id"], result)
     page.update(result=result, entries=entries, evidence=evidence, error=None, seconds=seconds)
+
+
+def read_live(page):
+    """Read one page with Gemma 4 (or reuse this session's earlier read). Returns (ok, message)."""
+    started = time.monotonic()
+    cache = ss.setdefault("read_cache", {})
+    cache_key = f"{page['page_id']}:{page['rotation']}:{mode}"
+    try:
+        if cache_key in cache:
+            result = cache[cache_key]
+        else:
+            result = extract_page(get_provider(), images.for_model(page["image"]), mode)
+            cache[cache_key] = result
+            while len(cache) > READ_CACHE_SIZE:
+                cache.pop(next(iter(cache)))  # drop the oldest
+        load_extraction(result, round(time.monotonic() - started), page)
+        return True, f"✅ {page['label']}: {len(page['entries'])} amounts in {page['seconds']} s"
+    except ProviderError as e:
+        page.update(result=None, entries=None, evidence={}, error=e.friendly)
+    except ValueError as e:
+        page.update(result=None, entries=None, evidence={}, error=str(e))
+    return False, f"⚠️ {page['label']}: {page['error']}"
+
+
+def page_status(p):
+    if store.has_page(p["page_id"]):
+        return "✅ in ledger"
+    if p["entries"] is not None:
+        return "🟠 read, needs review"
+    return "⚠️ couldn't read" if p["error"] else "⏳ not read yet"
+
+
+def pick_page(where):
+    """Switch between the photos uploaded together."""
+    pages = list(ss.batch.values())
+    if len(pages) < 2:
+        return
+    ids = [p["page_id"] for p in pages]
+    cur = ids.index(ss.page["page_id"]) if ss.page and ss.page["page_id"] in ids else 0
+    choice = st.selectbox("Page", range(len(pages)), index=cur, key=f"pick_{where}_{cur}",
+                          format_func=lambda i: f"Page {i + 1} of {len(pages)}: {pages[i]['label']} · "
+                                                f"{page_status(pages[i])}")
+    if choice != cur:
+        ss.page = pages[choice]
+        st.rerun()
 
 
 st.title("📒 DueNote")
@@ -135,23 +187,62 @@ if step == STEPS[0]:
             ss.last_upload_id = None  # so uploading a photo again later still replaces the sample
     st.caption("Sample replay uses a manually verified transcription. **No AI call, no internet, no key.**")
 
-    up_tab, cam_tab = st.tabs(["📁 Upload photo", "📷 Camera"])
+    up_tab, cam_tab = st.tabs(["📁 Upload photos (one or many)", "📷 Camera"])
     with up_tab:
-        uploaded = st.file_uploader("Notebook page", type=["png", "jpg", "jpeg", "webp"], label_visibility="collapsed")
+        uploaded = st.file_uploader("Notebook pages", type=["png", "jpg", "jpeg", "webp"],
+                                    accept_multiple_files=True, label_visibility="collapsed")
     with cam_tab:
         snapped = st.camera_input("Take a photo", label_visibility="collapsed")
-    incoming = uploaded or snapped
-    if incoming is not None:
-        data = incoming.getvalue()
+
+    first_new = None
+    for f in uploaded or []:
+        data = f.getvalue()
+        if images.page_id_for(data) in ss.batch:
+            continue  # already added: re-runs and duplicate files never create a second page
+        if len(ss.batch) >= MAX_BATCH:
+            st.warning(f"Only {MAX_BATCH} pages at a time. Confirm these first, then add more.")
+            break
+        try:
+            image, pid = images.load_photo(data)
+            ss.batch[pid] = new_page(pid, image, f.name, is_demo=None, select=False)
+            first_new = first_new or ss.batch[pid]
+        except images.ImageProblem as e:
+            st.error(f"⚠️ {f.name}: {e}")  # one bad file doesn't stop the others
+    if first_new:
+        ss.page = first_new
+    if snapped is not None:
+        data = snapped.getvalue()
         upload_id = images.page_id_for(data)
-        if ss.get("last_upload_id") != upload_id:  # only a NEW file replaces the current page
+        if ss.get("last_upload_id") != upload_id:  # only a NEW photo replaces the current page
             ss.last_upload_id = upload_id
             try:
                 image, pid = images.load_photo(data)
-                new_page(pid, image, getattr(incoming, "name", "camera photo"), is_demo=None)
+                ss.batch[pid] = new_page(pid, image, "camera photo", is_demo=None)
             except images.ImageProblem as e:
-                ss.page = None
                 st.error(f"⚠️ {e}")
+
+    if ss.batch:
+        unread = [p for p in ss.batch.values() if p["entries"] is None and not store.has_page(p["page_id"])]
+        if len(ss.batch) > 1:
+            st.markdown(f"**📚 {len(ss.batch)} pages uploaded**")
+            for n, p in enumerate(ss.batch.values(), 1):
+                st.caption(f"{n}. {p['label']} · {page_status(p)}")
+        if len(unread) > 1 and st.button(f"🤖 Read all {len(unread)} pages with Gemma 4 (live AI)",
+                                         type="primary", width="stretch"):
+            with st.status(f"Reading {len(unread)} pages, one after another…", expanded=True) as status:
+                done = 0
+                for n, p in enumerate(unread, 1):
+                    st.write(f"Page {n} of {len(unread)}: {p['label']}… (about 1 minute each)")
+                    ok, msg = read_live(p)
+                    done += ok
+                    st.write(msg)
+                status.update(label=f"Read {done} of {len(unread)} pages", state="complete" if done else "error")
+            first_read = next((p for p in unread if p["entries"] is not None), None)
+            if first_read:
+                ss.page = first_read
+                st.button("Review the pages →", on_click=go, args=(1,), type="primary", width="stretch",
+                          key="review_batch")
+        pick_page("capture")
 
     page = ss.page
     if page:
@@ -172,29 +263,12 @@ if step == STEPS[0]:
                     load_extraction(fixture)
             if st.button("🤖 Read with Gemma 4 (live AI)", type="secondary" if page["is_demo"] else "primary",
                          width="stretch"):
-                started = time.monotonic()
-                cache = ss.setdefault("read_cache", {})
-                cache_key = f"{page['page_id']}:{page['rotation']}:{mode}"
                 with st.status("Reading with Gemma 4 (live)…", expanded=True) as status:
-                    try:
-                        if cache_key in cache:
-                            result = cache[cache_key]
-                            st.write("Already read in this session. Reusing that result.")
-                        else:
-                            st.write("Asking both Gemma 4 models at once; the first good answer wins. "
-                                     "Usually about 1 minute, longer when Google's servers are busy.")
-                            result = extract_page(get_provider(), images.for_model(page["image"]), mode)
-                            cache[cache_key] = result
-                            while len(cache) > READ_CACHE_SIZE:
-                                cache.pop(next(iter(cache)))  # drop the oldest
-                        load_extraction(result, round(time.monotonic() - started))
-                        status.update(label=f"Read in {page['seconds']} s", state="complete")
-                    except ProviderError as e:
-                        page.update(result=None, entries=None, evidence={}, error=e.friendly)
-                        status.update(label="Couldn't read the page", state="error")
-                    except ValueError as e:
-                        page.update(result=None, entries=None, evidence={}, error=str(e))
-                        status.update(label="Couldn't read the page", state="error")
+                    st.write("Asking both Gemma 4 models at once; the first good answer wins. "
+                             "Usually about 1 minute, longer when Google's servers are busy.")
+                    ok, _ = read_live(page)
+                    status.update(label=f"Read in {page['seconds']} s" if ok else "Couldn't read the page",
+                                  state="complete" if ok else "error")
             if page["error"]:
                 st.error(f"⚠️ {page['error']} Nothing from earlier pages is shown for this photo.")
             if page["entries"] is not None:
@@ -207,6 +281,7 @@ if step == STEPS[0]:
 
 # ================= 2. REVIEW =================
 if step == STEPS[1]:
+    pick_page("review")
     page = ss.page
     if not page or page["entries"] is None:
         st.info("Capture and read a page first.")
@@ -266,8 +341,15 @@ if step == STEPS[1]:
                                    rows, page["evidence"], (page["result"] or {}).get("written_total"), revision(rows)):
                     pending = sum(not r["resolved"] for r in rows)
                     ss.flash = (f"✅ Page confirmed: {len(rows) - pending} rows added to your ledger."
-                                + (f" {pending} kept as 🟠 Needs checking. Fix them below." if pending else ""))
-                go(2)  # straight to Collect
+                                + (f" {pending} kept as 🟠 Needs checking." if pending else ""))
+                waiting = [p for p in ss.batch.values()
+                           if p["entries"] is not None and not store.has_page(p["page_id"])]
+                if waiting:  # more uploaded pages to check: go straight to the next one
+                    ss.page = waiting[0]
+                    ss.flash = ss.get("flash", "") + f" Next: {waiting[0]['label']} ({len(waiting)} left to review)."
+                    go(1)
+                else:
+                    go(2)  # straight to Collect
 
             label = "✅ Confirm page into ledger · کھاتے میں شامل کریں"
             if unresolved:
@@ -448,7 +530,7 @@ if step == STEPS[3]:
     st.divider()
     if st.button("🗑️ Clear data in this mode", type="secondary"):
         store.clear()
-        ss.page, ss.drafts, ss.read_cache = None, {}, {}
+        ss.page, ss.drafts, ss.read_cache, ss.batch = None, {}, {}, {}
         st.rerun()
     nav(3)
 
