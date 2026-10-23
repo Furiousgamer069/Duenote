@@ -1,4 +1,4 @@
-"""Core logic: Gemma 4 reads the notebook, Python does the maths, Gemma writes reminders."""
+﻿"""Core logic: Gemma 4 reads the notebook, Python does the maths, Gemma writes reminders."""
 import json
 import os
 import re
