@@ -185,6 +185,7 @@ with tab_review:
             edited = st.data_editor(
                 base, key=f"editor_{page['page_id']}", width="stretch", hide_index=True, num_rows="dynamic",
                 disabled=["row", "written", "check"],
+                column_order=["name", "amount", "direction", "check", "row", "written"],
                 column_config={"direction": st.column_config.SelectboxColumn(options=["owed", "paid", "unclear"]),
                                "written": st.column_config.TextColumn(width="large")})
         provisional = []

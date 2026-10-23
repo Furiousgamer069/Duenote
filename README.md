@@ -1,68 +1,123 @@
 # 📒 DueNote
 
-**Snap a photo of a handwritten dues notebook → get a clean ledger → send polite WhatsApp reminders in Urdu.**
+**Turn a paper *khata* (credit notebook) into a checked collection ledger:**
+photograph → check against the page → confirm balances → respectful WhatsApp draft → record payment → history.
 
-Built at **Hacktoberfest Hack Day Faisalabad x Himmatkaar** with **Gemma 4**, Google's open-weight model.
+Built at **Hacktoberfest Hack Day Faisalabad x Himmatkaar** with **Gemma 4** (Google's open-weight model, via the Gemini API). DueNote is a web app: it runs in the browser on a laptop or phone, with no install for the person using it.
 
 ## The problem
 
-Millions of small shops in Pakistan run on a handwritten *khata* (credit notebook), and tuition academies track fees in paper registers. Owners lose money because they forget who owes what, and asking people for payment is awkward.
-
-## What DueNote does
-
-1. **Snap**: upload or take a photo of the notebook page (English, Urdu or Roman Urdu, messy handwriting is fine)
-2. **Read**: Gemma 4 reads every entry: name, details, amount, and whether it was *owed* or *paid back*
-3. **Check**: the owner can fix any misread line in an editable table
-4. **Calculate**: **plain Python** works out each person's balance. The AI never does the maths, so it can't invent numbers
-5. **Remind**: Gemma 4 writes a warm, respectful WhatsApp reminder for everyone who still owes money, in Urdu script or Roman Urdu, with a one-tap **Open in WhatsApp** button
-6. **Export**: download the ledger as a CSV for Excel
-
-Works in two modes: **🛒 Shop udhaar** and **🎓 Tuition fees**.
+Small general stores in Pakistan give goods on credit (*udhaar*) and write it in a notebook. Totals get missed, people forget who owes what, and asking for money is awkward. DueNote helps the owner see exactly who owes what, checked against their own page, and send a polite reminder.
 
 ## How it works
 
-```
-Photo ──► Gemma 4 (vision) ──► entries table ──► owner edits ──► Python balances ──► Gemma 4 ──► WhatsApp reminders
-```
+| Step | What happens | Who does it |
+|---|---|---|
+| **1 · Capture** | Upload or snap a page (Urdu, Roman Urdu or English) | Owner |
+| | Transcribe every row: name *as written*, amounts *as written*, owed or paid | **Gemma 4** (transcription only) |
+| **2 · Review** | Photo and rows side by side; 🟠 rows need checking; written balances and totals compared with the calculation | Owner + Python |
+| | **Confirm page.** Blocked until every row is clear | Owner |
+| **3 · Collect** | Exact balances (Decimal), customer statements, **Record payment** | Python |
+| | WhatsApp draft from a reviewed template; exact amount inserted by code; checked again after any edit | Python |
+| **4 · History** | Confirmed pages, payment events, transaction and summary CSV exports | SQLite |
 
-- `khata.py`: core logic (Gemma calls, JSON parsing, balance maths, reminder writing)
-- `app.py`: the Streamlit interface
-- **Reliability**: if Google's servers are busy, DueNote retries and automatically switches between Gemma 4 models (`gemma-4-26b-a4b-it` → `gemma-4-31b-it`)
+**Design rules**
+- **The AI never does maths.** All money is parsed and summed in Python with `Decimal`.
+- **Unknown is never zero.** `1,150`, `۱۲۵۰`, `١٢٥٠`, `Rs. 3,550`, `2400/-` are parsed exactly. Smudged, negative, missing or non-numeric amounts and unclear directions stay **unresolved** with a reason, and are excluded until the owner fixes them.
+- **Written balances are evidence, not debts.** A page's "remaining" column and grand total are compared with the calculation, and any disagreement is shown.
+- **Identity:** names are kept in the original script (`عثمان` ≠ `Usman`). Similar names are suggested, but **merged only when the owner approves**.
+- **Drafts can't go stale.** Every draft is tied to a ledger revision (all amounts, aliases, shop name, mode). Change anything and the old draft disappears immediately.
+- **Nothing is sent automatically.** "Open in WhatsApp" only opens click-to-chat with the draft. It doesn't mean the message was sent or the money paid.
 
-## 🧩 Agent skill: use DueNote inside any AI agent
-
-DueNote also ships as an open **Agent Skill** following the `SKILL.md` standard: [`skills/duenote/SKILL.md`](skills/duenote/SKILL.md).
-
-Drop the `skills/duenote` folder into any skill-compatible agent (Claude, Hermes Agent and others). The agent can then read a notebook photo, calculate balances, and draft Urdu WhatsApp reminders, following the same rule as the app: **the agent reads and writes, a script calculates.**
-
-```bash
-python skills/duenote/scripts/balances.py skills/duenote/scripts/example_entries.json
-```
-
-`balances.py` uses only the Python standard library, so it runs anywhere with no installs.
-
-## Run it
+## Run it (tested on Windows 11, Python 3.12)
 
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-```
-
-Copy `.env.example` to `.env` and add your free Gemini API key from https://aistudio.google.com/apikey, then:
-
-```bash
 streamlit run app.py
 ```
 
-Click **"Try with a sample page"** to see it work instantly.
+Open http://localhost:8501. On a phone on the same Wi-Fi, use the **Network URL** that Streamlit prints.
 
-## What's next
+### Two modes
+- **🧪 Sample replay (no key, no internet):** click *Sample replay → Replay verified transcription*. This loads a **manually verified transcription** of the sample page. It is **demo data, not live AI**.
+- **🤖 Live AI:** copy `.env.example` to `.env`, add a free key from https://aistudio.google.com/apikey, then use *Read with Gemma 4 (live AI)* on any photo.
 
-- Voice notes in Urdu instead of photos
-- Monthly reports and "who pays late" insights
-- Running Gemma on the phone itself so shop data never leaves the device
+### Tests (no key, no network)
+
+```bash
+python -m pytest -q
+```
+
+78 tests: money parsing (Urdu/Arabic digits, lakh separators, decimals, negative/NaN/malformed), acceptance totals, the payment update, duplicate imports, aliases, draft invalidation, phone formats, malformed model JSON with one repair attempt, simulated 401/403/404/429/5xx/empty responses, corrupted and oversized uploads, EXIF rotation, CSV formula escaping, session isolation, and full app flows via Streamlit `AppTest`. CI runs them on every push (`.github/workflows/tests.yml`).
+
+Live model check (uses your key): `python live_smoke_check.py`
+
+## Acceptance results (automated tests)
+
+| Check | Result |
+|---|---|
+| Roman Urdu sample: Usman 3,550 · Ali bhai 400 · Bilal 0 | **Rs. 3,950** in app *and* skill |
+| Urdu table: احمد علی 7,000 · عائشہ 2,500 · بلال خان 0 · سارہ 1,200 · عثمان 4,000 | **Rs. 14,700**, matches the page's written total |
+| Record عثمان's Rs. 1,000 payment | 3,000 → total **Rs. 13,700** (survives restart) |
+| Edit / pay after drafting | old draft removed immediately |
+
+## Measured live extraction (Gemma 4, 2 sample pages)
+
+MEASURED_RESULTS_PLACEHOLDER
+
+Reproduce: `python eval/run_eval.py` (live) · `python eval/run_eval.py --replay` (pipeline check only). Two pages is a tiny sample, so these numbers show the method, not general accuracy.
+
+## Architecture
+
+```
+app.py            Streamlit UI: Capture / Review / Collect / History
+extract.py        prompt, JSON schema validation, one bounded repair attempt, rows -> entries
+provider.py       lazy Gemma adapter: configurable models, error classification, retries within a time budget
+images.py         15 MB / 40 MP limits, corrupt-file handling, EXIF rotation, resize to 1600 px
+reminders.py      Urdu + Roman Urdu templates, draft validation, Pakistani phone normalization
+store.py          SQLite: confirmed pages, entries, payments, approved aliases, events; CSV-safe export
+skills/duenote/   portable Agent Skill (SKILL.md) + scripts/ledger.py, the ONE money core shared with the app
+fixtures/         manually verified transcriptions for Sample replay and evaluation labels
+eval/             evaluation runner
+tests/            pytest suite
+```
+
+**Model:** Gemma 4 (`gemma-4-26b-a4b-it`, fallback `gemma-4-31b-it`) through Google's Gemini API, set in `GEMMA_MODELS`. These IDs were listed by the Gemini API models endpoint for our key. We don't rely on structured-output parameters. Every response is validated against our own schema. Inference is **hosted by Google, not on-device**.
+
+## 🧩 Agent skill
+
+[`skills/duenote/SKILL.md`](skills/duenote/SKILL.md) teaches any skill-compatible agent the same workflow. `scripts/balances.py` uses the **same `ledger.py`** as the app (standard library only), so agents get identical results.
+
+```bash
+python skills/duenote/scripts/balances.py skills/duenote/scripts/example_entries.json
+```
+
+## Privacy
+
+- **Demo mode** keeps data only in your browser session (in memory). It's gone when you close the tab.
+- **My shop mode** stores confirmed data in `data/duenote.db` on *this computer* (excluded from Git). It's a **single-user prototype with no login**: don't host it publicly with real data. A typed shop name is not access control.
+- Live AI sends the photo to Google's Gemini API. Notebook contents and keys aren't logged by DueNote. "Clear data" in History deletes the current mode's records.
+- CSV exports escape text starting with `= + - @` to block spreadsheet formula injection.
+
+## Status: what's real
+
+| | |
+|---|---|
+| **Implemented** | Capture/Review/Collect/History, exact money core, unresolved handling, evidence checks, confirmation gate, payments, statements, aliases, revision-bound drafts, phone validation, SQLite history, CSV exports, agent skill, 78 tests, CI |
+| **Replayed** | Sample replay uses verified fixtures. No AI runs in that mode |
+| **Measured** | Live extraction on the 2 sample pages (above). No user testing yet |
+| **Planned** | Crops of each source row, AI tone rewriting that keeps the amount locked, login for multi-user hosting, more labelled pages, voice input |
+
+## Limitations
+
+- Only 2 labelled pages, one of which is synthetic, so accuracy on real messy handwriting is not yet known.
+- No per-row image crops: the full page is shown next to the rows instead (we don't invent boxes).
+- Live reads take 1–3 minutes when Google's servers are busy.
+- Summary pages and transaction pages for the same customer can double count; DueNote warns about re-photographed pages but can't detect every overlap.
+- Single-user, local prototype. Not built for public multi-user hosting.
 
 ## License
 
-MIT, free and open source.
+MIT
