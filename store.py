@@ -145,6 +145,16 @@ class Store:
                 self.db.execute(f"DELETE FROM {table}")
 
 
+def export_rows(entries):
+    """Transaction rows for CSV. Unclear rows export a blank amount and their raw text, never 'None'."""
+    return [{"date": csv_safe(e["date"]), "name": csv_safe(e["name"]), "name_latin": csv_safe(e["name_latin"]),
+             "details": csv_safe(e["details"]), "type": e["kind"] or "unclear",
+             "amount": "" if e["amount"] is None else str(e["amount"]),
+             "status": "ok" if e["resolved"] else "needs checking: " + "; ".join(e["reasons"]),
+             "written_as": csv_safe(e["amount_raw"]), "page": csv_safe(e["page_id"]),
+             "row": csv_safe(e["row_ref"]), "source": e["source"]} for e in entries]
+
+
 def csv_safe(value):
     """Stop spreadsheet formula injection: text starting with = + - @ is prefixed with '."""
     text = "" if value is None else str(value)

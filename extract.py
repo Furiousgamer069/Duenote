@@ -101,6 +101,24 @@ def extract_page(provider, image, mode="shop"):
     return result
 
 
+def apply_edits(page_id, entries, edited_records):
+    """Rebuild provisional entries from the Review table, matching rows by their hidden id.
+
+    Deleting or adding rows never shifts one row's source text/date onto another.
+    """
+    by_id = {e["id"]: e for e in entries}
+    out = []
+    for i, row in enumerate(edited_records):
+        original = by_id.get(row.get("id")) or {}
+        kind = {"owed": OWED, "paid": PAID}.get(str(row.get("direction") or ""), "")
+        entry_id = original.get("id") or f"{page_id}:m{i + 1}"
+        out.append(normalize_entry({
+            **original, "name": row.get("name"), "amount_raw": row.get("amount"), "kind": kind,
+            "source": original.get("source", "manual"), "page_id": page_id,
+            "row_ref": original.get("row_ref") or f"m{i + 1}"}, default_id=entry_id))
+    return out
+
+
 def rows_to_entries(page_id, result):
     """One entry per owed/paid/unclear amount. Written balances become evidence, never debts."""
     entries, evidence = [], {}

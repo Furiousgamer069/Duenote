@@ -163,5 +163,22 @@ def test_skill_cli_matches_app_on_example():
     assert total_due(compute_balances([normalize_entry(r) for r in rows])) == 3950
 
 
+def test_review_edits_match_rows_by_id_after_deleting_a_middle_row():
+    from extract import apply_edits
+    entries, _, _ = load_fixture("roman_page.json")
+    records = [{"id": e["id"], "name": e["name"], "amount": e["amount_raw"], "direction": e["kind"]} for e in entries]
+    del records[1]  # owner deletes Bilal's first row
+    out = apply_edits("p", entries, records)
+    assert [e["original_text"] for e in out] == [e["original_text"] for e in entries if e is not entries[1]]
+    assert out[1]["row_ref"] == "3" and "wapis diye" in out[1]["original_text"]
+
+
+def test_export_of_unclear_row_has_blank_amount_not_none():
+    from store import export_rows
+    row = export_rows([normalize_entry({"name": "Hina", "amount": "[unreadable]", "kind": ""})])[0]
+    assert row["amount"] == "" and row["type"] == "unclear" and row["status"].startswith("needs checking")
+    assert row["written_as"] == "[unreadable]"
+
+
 def test_csv_safe():
     assert csv_safe("=HYPERLINK(1)") == "'=HYPERLINK(1)" and csv_safe("@x") == "'@x" and csv_safe("Ali") == "Ali"

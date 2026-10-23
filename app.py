@@ -20,11 +20,11 @@ load_dotenv(os.path.join(ROOT, ".env"))
 
 import images  # noqa: E402
 import reminders  # noqa: E402
-from extract import extract_page, rows_to_entries  # noqa: E402
+from extract import apply_edits, extract_page, rows_to_entries  # noqa: E402
 from ledger import (check_evidence, compute_balances, customer_id, format_rs, normalize_entry,  # noqa: E402
                     revision, suggest_aliases, total_due)
 from provider import GemmaProvider, ProviderError  # noqa: E402
-from store import Store, csv_safe  # noqa: E402
+from store import Store, csv_safe, export_rows  # noqa: E402
 
 SAMPLES = {
     "roman": ("Roman Urdu page", "samples/khata_sample.png", "fixtures/roman_page.json"),
@@ -117,6 +117,10 @@ def nav(i):
 
 
 step = st.radio("Step", STEPS, key="step", horizontal=True, label_visibility="collapsed")
+if ss.get("flash"):
+    message = ss.pop("flash")  # feedback from the last action (payment, confirm, fix)
+    st.success(message)
+    st.toast(message)  # also visible when scrolled down on a phone
 
 # ================= 1. CAPTURE =================
 if step == STEPS[0]:
@@ -197,6 +201,8 @@ if step == STEPS[0]:
                 source = "Sample replay (verified demo data)" if page["is_demo"] and page["seconds"] is None \
                     else f"Live Gemma 4 read · {page['seconds']} s"
                 st.success(f"✅ {len(page['entries'])} amounts found · {source}")
+                st.button("Review this page →", on_click=go, args=(1,), type="primary", width="stretch",
+                          key="review_now")
     nav(0)
 
 # ================= 2. REVIEW =================
@@ -205,32 +211,31 @@ if step == STEPS[1]:
     if not page or page["entries"] is None:
         st.info("Capture and read a page first.")
     else:
+        confirmed = store.has_page(page["page_id"])
         st.subheader("Check every row against the photo")
-        st.caption("🟠 = needs checking. Fix the amount or direction until every row is clear. "
-                   "Amounts accept 1,150 or ۱۲۵۰. Nothing unreadable is counted as zero.")
+        if confirmed:
+            st.info("✅ This page is already in your ledger, so the table is locked. "
+                    "Fix any 🟠 rows or record payments in **3 · Collect**.")
+        else:
+            st.caption("Double-click a cell to edit. 🟠 = needs checking. Amounts accept 1,150 or ۱۲۵۰. "
+                       "Nothing unreadable is counted as zero.")
         img_col, table_col = st.columns([2, 3])
         with img_col:
             st.image(page["image"], caption="Source page", width="stretch")
         with table_col:
             base = pd.DataFrame([{
-                "row": e["row_ref"], "written": e["original_text"], "name": e["name"],
+                "id": e["id"], "row": e["row_ref"], "written": e["original_text"], "name": e["name"],
                 "amount": e["amount_raw"], "direction": KIND_LABELS[e["kind"]],
                 "check": "🟠 " + "; ".join(e["reasons"]) if e["reasons"] else "✅",
             } for e in page["entries"]])
             edited = st.data_editor(
-                base, key=f"editor_{page['page_id']}", width="stretch", hide_index=True, num_rows="dynamic",
-                disabled=["row", "written", "check"],
-                column_order=["name", "amount", "direction", "check", "row", "written"],
+                base, key=f"editor_{page['page_id']}", width="stretch", hide_index=True,
+                num_rows="fixed" if confirmed else "dynamic",
+                disabled=True if confirmed else ["id", "row", "written", "check"],
+                column_order=["name", "amount", "direction", "check", "row", "written"],  # id stays hidden
                 column_config={"direction": st.column_config.SelectboxColumn(options=["owed", "paid", "unclear"]),
                                "written": st.column_config.TextColumn(width="large")})
-        provisional = []
-        for i, row in enumerate(edited.to_dict("records")):
-            original = page["entries"][i] if i < len(page["entries"]) else {}
-            kind = {"owed": "owed", "paid": "paid"}.get(str(row.get("direction") or ""), "")
-            provisional.append(normalize_entry({
-                **original, "name": row.get("name"), "amount_raw": row.get("amount"), "kind": kind,
-                "source": original.get("source", "manual"), "page_id": page["page_id"],
-                "row_ref": row.get("row") or f"m{i + 1}"}, default_id=original.get("id") or f"{page['page_id']}:m{i + 1}"))
+        provisional = apply_edits(page["page_id"], page["entries"], edited.to_dict("records"))
 
         unresolved = [e for e in provisional if not e["resolved"]]
         page_balances = compute_balances(provisional)
@@ -245,22 +250,23 @@ if step == STEPS[1]:
         elif page["evidence"] or (page["result"] or {}).get("written_total"):
             st.success("✅ Balances and total written on the page match Python's calculation.")
 
-        if unresolved:
+        if unresolved and not confirmed:
             st.warning(f"🟠 {len(unresolved)} row(s) need checking. Fix them above now, or confirm anyway: "
                        "they'll be kept as **Needs checking**, not counted, and you can fix them in Collect.\n\n"
                        + "\n".join(f"- Row {e['row_ref']} ({e['name'] or '?'}): {'; '.join(e['reasons'])}"
                                    for e in unresolved))
-        if store.has_page(page["page_id"]):
-            st.info("This exact photo is already confirmed in your ledger (no double counting).")
-        else:
+        if not confirmed:
             similar = store.similar_page(provisional)
             if similar:
                 st.warning(f"⚠️ This looks like the same page as '{similar['label']}' already in your ledger. "
                            "Confirm only if it's really a different page.")
 
             def confirm_page(page=page, rows=provisional):
-                store.save_page(page["page_id"], page["label"], (page["result"] or {}).get("page_kind"), mode,
-                                rows, page["evidence"], (page["result"] or {}).get("written_total"), revision(rows))
+                if store.save_page(page["page_id"], page["label"], (page["result"] or {}).get("page_kind"), mode,
+                                   rows, page["evidence"], (page["result"] or {}).get("written_total"), revision(rows)):
+                    pending = sum(not r["resolved"] for r in rows)
+                    ss.flash = (f"✅ Page confirmed: {len(rows) - pending} rows added to your ledger."
+                                + (f" {pending} kept as 🟠 Needs checking. Fix them below." if pending else ""))
                 go(2)  # straight to Collect
 
             label = "✅ Confirm page into ledger · کھاتے میں شامل کریں"
@@ -300,7 +306,8 @@ if step == STEPS[2]:
                                        index=1 if e["kind"] == "paid" else 0)
                 if st.form_submit_button("✔️ Save fix", width="stretch"):
                     try:
-                        store.resolve_entry(e["id"], name_in, amount_in, kind_in)
+                        fixed = store.resolve_entry(e["id"], name_in, amount_in, kind_in)
+                        ss.flash = f"✅ Row fixed: {fixed['name']} · Rs. {format_rs(fixed['amount'])} {fixed['kind']}."
                         st.rerun()
                     except ValueError as err:
                         st.error(str(err))
@@ -316,15 +323,17 @@ if step == STEPS[2]:
             col_t.info(f"Are **{a}** and **{b}** the same person? DueNote never merges names by itself.")
             if col_b.button("Yes, same", key=f"alias_{a}_{b}"):
                 store.approve_alias(b, a)
+                ss.flash = f"✅ {b} and {a} are now one customer."
                 st.rerun()
 
         for cid, c in balances.items():
             latin = next((e["name_latin"] for e in entries if e["name"] in c["names"] and e["name_latin"]), "")
             title = f"{c['name']}" + (f" ({latin})" if latin and latin != c["name"] else "")
             with st.expander(f"{STATE_BADGE[c['state']]} · **{title}** · Rs. {format_rs(c['balance'])}",
-                             expanded=c["state"] == "due"):
+                             expanded=c["state"] in ("due", "needs checking")):
                 st_rows = [e for e in entries if e["name"] and customer_id(e["name"], aliases) == cid]
-                st.dataframe(pd.DataFrame([{"Date": e["date"], "Details": e["details"], "Type": e["kind"],
+                st.dataframe(pd.DataFrame([{"Date": e["date"], "Details": e["details"],
+                                            "Type": e["kind"] or "🟠 unclear",
                                             "Amount": format_rs(e["amount"]) if e["amount"] is not None else "?",
                                             "Source": e["source"]} for e in st_rows]),
                              hide_index=True, width="stretch")
@@ -339,8 +348,20 @@ if step == STEPS[2]:
                     date_in = pc2.date_input("Date", value=date.today())
                     note_in = pc3.text_input("Note (optional)")
                     if st.form_submit_button("💰 Record payment", width="stretch"):
+                        fingerprint = (cid, amount_in.strip(), date_in.isoformat(), note_in.strip())
+                        last = ss.get("last_payment")
+                        if last and last[0] == fingerprint and time.monotonic() - last[1] < 8:
+                            # a double-tap re-sends the same form: never record the same payment twice
+                            ss.flash = "ℹ️ That payment was already recorded (duplicate tap ignored)."
+                            st.rerun()
                         try:
-                            store.record_payment(c["name"], amount_in, date_in.isoformat(), note_in)
+                            entry = store.record_payment(c["name"], amount_in, date_in.isoformat(), note_in)
+                            ss.last_payment = (fingerprint, time.monotonic())
+                            new_balance = c["balance"] - entry["amount"]
+                            ss.flash = (f"✅ Recorded Rs. {format_rs(entry['amount'])} from {c['name']}. "
+                                        + (f"New balance: Rs. {format_rs(new_balance)}." if new_balance >= 0 else
+                                           f"They paid Rs. {format_rs(-new_balance)} more than they owed. "
+                                           "This now shows as 🔵 Credit."))
                             st.rerun()
                         except ValueError as e:
                             st.error(str(e))
@@ -395,10 +416,7 @@ if step == STEPS[3]:
                      hide_index=True, width="stretch")
     entries = store.entries()
     if entries:
-        tx = pd.DataFrame([{"date": csv_safe(e["date"]), "name": csv_safe(e["name"]),
-                            "name_latin": csv_safe(e["name_latin"]), "details": csv_safe(e["details"]),
-                            "type": e["kind"], "amount": str(e["amount"]), "page": csv_safe(e["page_id"]),
-                            "row": csv_safe(e["row_ref"]), "source": e["source"]} for e in entries])
+        tx = pd.DataFrame(export_rows(entries))
         summary = pd.DataFrame([{"name": csv_safe(c["name"]), "owed": str(c["owed"]), "paid": str(c["paid"]),
                                  "balance": str(c["balance"]), "state": c["state"]}
                                 for c in compute_balances(entries, store.aliases()).values()])

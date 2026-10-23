@@ -113,6 +113,33 @@ def test_confirm_with_unclear_rows_keeps_them_pending_and_fixable():
     assert metric(at, "Total to collect") == "Rs. 1,650" and metric(at, "Rows to check") == "0"
 
 
+def test_double_tap_payment_is_recorded_once_with_feedback():
+    at = replay_and_confirm(new_app(), "Roman Urdu page")
+    usman = next(i for i, e in enumerate(at.expander) if "Usman" in e.label)
+    for _ in range(2):
+        [t for t in at.text_input if t.label == "Amount (Rs.)"][usman].set_value("1000")
+        [b for b in at.button if "Record payment" in b.label][usman].click().run()
+    assert metric(at, "Total to collect") == "Rs. 2,950"  # was 1,950 before the fix
+    assert any("already recorded" in s.value for s in at.success)
+
+
+def test_payment_feedback_and_overpayment_shows_credit():
+    at = replay_and_confirm(new_app(), "Roman Urdu page")
+    ali = next(i for i, e in enumerate(at.expander) if "Ali bhai" in e.label)
+    [t for t in at.text_input if t.label == "Amount (Rs.)"][ali].set_value("500")
+    [b for b in at.button if "Record payment" in b.label][ali].click().run()
+    assert any("Rs. 100 more than they owed" in s.value for s in at.success)
+    assert any("Ali bhai" in e.label and "Credit" in e.label for e in at.expander)
+    assert not any(b.key == "prep_ali bhai" for b in at.button)  # no reminder to a customer in credit
+
+
+def test_confirmed_page_review_is_locked():
+    at = replay_and_confirm(new_app(), "Roman Urdu page")
+    goto(at, 2)
+    assert any("already in your ledger" in i.value for i in at.info)
+    assert not any("Confirm" in b.label for b in at.button)
+
+
 def test_new_photo_clears_old_results():
     at = new_app()
     button(at, "Sample replay: Roman Urdu page").click().run()
