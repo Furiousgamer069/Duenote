@@ -56,6 +56,13 @@ def normalize_phone(phone):
     return "", "Use a Pakistani mobile number like 0300 1234567 or +92 300 1234567."
 
 
+def display_phone(number):
+    """'923001234567' -> '+92 300 1234567' (blank stays blank)."""
+    if not number:
+        return ""
+    return f"+92 {number[2:5]} {number[5:]}" if len(number) == 12 and number.startswith("92") else number
+
+
 def whatsapp_url(number, text):
     """Click-to-chat link. Opening WhatsApp is NOT the same as sending or being paid."""
     return f"https://wa.me/{number}?text={urllib.parse.quote(text)}"

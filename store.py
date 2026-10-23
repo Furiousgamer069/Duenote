@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS entries (
     id TEXT PRIMARY KEY, page_id TEXT, row_ref TEXT, name TEXT, name_latin TEXT, date TEXT,
     details TEXT, original_text TEXT, amount_raw TEXT, amount TEXT, kind TEXT, source TEXT,
     created_at TEXT);
+CREATE TABLE IF NOT EXISTS contacts (customer_id TEXT PRIMARY KEY, phone TEXT, due_date TEXT, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS aliases (alias_key TEXT PRIMARY KEY, canonical_key TEXT, approved_at TEXT);
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT, type TEXT, customer TEXT, amount TEXT,
@@ -119,6 +120,16 @@ class Store:
             self._event("payment", name, str(amount), note, entry["id"])
         return entry
 
+    # ---- contacts: saved WhatsApp number and optional confirmed due date ----
+    def contact(self, cid):
+        row = self.db.execute("SELECT phone, due_date FROM contacts WHERE customer_id=?", (cid,)).fetchone()
+        return {"phone": row["phone"] or "", "due_date": row["due_date"] or ""} if row else {"phone": "", "due_date": ""}
+
+    def save_contact(self, cid, phone, due_date=""):
+        """phone must already be normalized ('923XXXXXXXXX') or blank; due_date is ISO 'YYYY-MM-DD' or blank."""
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO contacts VALUES (?,?,?,?)", (cid, phone, due_date, _now()))
+
     # ---- aliases (owner approved only) ----
     def aliases(self):
         return {r["alias_key"]: r["canonical_key"] for r in self.db.execute("SELECT * FROM aliases")}
@@ -141,7 +152,7 @@ class Store:
 
     def clear(self):
         with self.db:
-            for table in ("pages", "entries", "aliases", "events"):
+            for table in ("pages", "entries", "aliases", "events", "contacts"):
                 self.db.execute(f"DELETE FROM {table}")
 
 

@@ -329,7 +329,11 @@ if step == STEPS[2]:
         for cid, c in balances.items():
             latin = next((e["name_latin"] for e in entries if e["name"] in c["names"] and e["name_latin"]), "")
             title = f"{c['name']}" + (f" ({latin})" if latin and latin != c["name"] else "")
-            with st.expander(f"{STATE_BADGE[c['state']]} · **{title}** · Rs. {format_rs(c['balance'])}",
+            contact = store.contact(cid)
+            # "Overdue" only when the owner saved a due date and it has passed
+            overdue = c["state"] == "due" and contact["due_date"] and date.fromisoformat(contact["due_date"]) < date.today()
+            badge = "⏰ Overdue" if overdue else STATE_BADGE[c["state"]]
+            with st.expander(f"{badge} · **{title}** · Rs. {format_rs(c['balance'])}",
                              expanded=c["state"] in ("due", "needs checking")):
                 st_rows = [e for e in entries if e["name"] and customer_id(e["name"], aliases) == cid]
                 st.dataframe(pd.DataFrame([{"Date": e["date"], "Details": e["details"],
@@ -366,39 +370,53 @@ if step == STEPS[2]:
                         except ValueError as e:
                             st.error(str(e))
 
+                if c["state"] == "needs checking":
+                    st.info("📵 WhatsApp reminder unlocks once you fix the 🟠 rows above, "
+                            "so we never ask for an uncertain amount.")
                 if c["state"] != "due":
-                    continue
-                st.markdown("**WhatsApp reminder**")
-                lang = st.radio("Language", ["Roman Urdu", "اردو"], horizontal=True, key=f"lang_{cid}")
+                    continue  # settled, credit and unchecked customers get no reminder
+
+                st.markdown("**💬 WhatsApp reminder · یاد دہانی**")
+                with st.form(f"contact_{cid}"):
+                    k1, k2 = st.columns([3, 2])
+                    phone_in = k1.text_input("WhatsApp number", reminders.display_phone(contact["phone"]),
+                                             placeholder="03XX XXXXXXX or +92 3XX XXXXXXX")
+                    due_in = k2.date_input("Due date (optional)", value=date.fromisoformat(contact["due_date"])
+                                           if contact["due_date"] else None)
+                    if st.form_submit_button("💾 Save number", width="stretch"):
+                        number, phone_err = reminders.normalize_phone(phone_in)
+                        if phone_err:
+                            st.error(f"⚠️ {phone_err}")
+                        else:
+                            store.save_contact(cid, number, due_in.isoformat() if due_in else "")
+                            ss.flash = (f"✅ Saved {reminders.display_phone(number)} for {c['name']}." if number
+                                        else f"✅ Saved details for {c['name']} (no number).")
+                            st.rerun()
+
+                lang = st.radio("Message language", ["Roman Urdu", "اردو"], horizontal=True, key=f"lang_{cid}")
                 lang_key = "roman" if lang == "Roman Urdu" else "urdu"
                 draft = ss.drafts.get(cid)
-                if draft and (draft["revision"] != rev or draft["lang"] != lang_key):
-                    ss.drafts.pop(cid)  # ledger, shop, mode or language changed: old draft is void
-                    ss.pop(f"msg_{cid}", None)
-                    draft = None
-                if draft is None:
-                    if st.button("✍️ Prepare draft", key=f"prep_{cid}"):
-                        name_for_msg = c["name"] if lang_key == "urdu" else (latin or c["name"])
-                        text = reminders.draft(name_for_msg, c["balance"], business, mode, lang_key)
-                        ss.drafts[cid] = {"revision": rev, "lang": lang_key, "amount": c["balance"]}
-                        ss[f"msg_{cid}"] = text
-                        st.rerun()
+                if draft and draft["revision"] != rev:
+                    st.caption("🔄 The balance or shop details changed, so the message was rewritten "
+                               f"with the current amount (Rs. {format_rs(c['balance'])}).")
+                if draft is None or draft["revision"] != rev or draft["lang"] != lang_key:
+                    # Always built from the CURRENT confirmed balance; any old wording is discarded
+                    name_for_msg = c["name"] if lang_key == "urdu" else (latin or c["name"])
+                    ss[f"msg_{cid}"] = reminders.draft(name_for_msg, c["balance"], business, mode, lang_key)
+                    ss.drafts[cid] = draft = {"revision": rev, "lang": lang_key, "amount": c["balance"]}
+                text = st.text_area("Preview: edit the wording if you like", key=f"msg_{cid}", height=110)
+                if lang_key == "urdu":
+                    rtl(text)
+                ok, problem = reminders.check_draft(text, draft["amount"])
+                if not ok:
+                    st.error(f"⚠️ {problem} Fix the message to enable the button.")
                 else:
-                    text = st.text_area("Message (you can edit the wording)", key=f"msg_{cid}", height=110)
-                    if lang_key == "urdu":
-                        rtl(text)
-                    ok, problem = reminders.check_draft(text, draft["amount"])
-                    phone_raw = st.text_input("WhatsApp number (optional)", placeholder="0300 1234567", key=f"ph_{cid}")
-                    number, phone_err = reminders.normalize_phone(phone_raw)
-                    if not ok:
-                        st.error(problem)
-                    elif phone_err:
-                        st.error(phone_err)
-                    else:
-                        label = "📲 Open chat in WhatsApp" if number else "📲 Choose contact in WhatsApp"
-                        st.link_button(label, reminders.whatsapp_url(number, text), width="stretch")
-                        st.caption("This only opens WhatsApp with the draft. You send it yourself; "
-                                   "it doesn't mean the message was delivered or paid.")
+                    number = contact["phone"]
+                    label = (f"📲 Remind on WhatsApp ({reminders.display_phone(number)})" if number
+                             else "📲 Remind on WhatsApp (choose contact)")
+                    st.link_button(label, reminders.whatsapp_url(number, text), width="stretch", type="primary")
+                    st.caption("Opens WhatsApp with this message ready. You press Send there. "
+                               "Opening WhatsApp doesn't mean it was sent or paid.")
     nav(2)
 
 # ================= 4. HISTORY =================

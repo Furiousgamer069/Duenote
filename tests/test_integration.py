@@ -46,6 +46,18 @@ def test_bad_phones_rejected(raw):
     assert number == "" and err
 
 
+def test_display_phone():
+    assert reminders.display_phone("923001234567") == "+92 300 1234567" and reminders.display_phone("") == ""
+
+
+def test_saved_contact_persists(tmp_path):
+    from store import Store
+    path = str(tmp_path / "c.db")
+    Store(path).save_contact("usman", "923001234567", "2026-10-30")
+    assert Store(path).contact("usman") == {"phone": "923001234567", "due_date": "2026-10-30"}
+    assert Store(path).contact("nobody") == {"phone": "", "due_date": ""}
+
+
 def test_blank_phone_link_lets_user_choose_contact():
     assert reminders.whatsapp_url("", "hi there") == "https://wa.me/?text=hi%20there"
 

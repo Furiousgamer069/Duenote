@@ -72,23 +72,65 @@ def test_roman_replay_total():
     assert metric(at, "Total to collect") == "Rs. 3,950"
 
 
-def test_payment_invalidates_old_draft():
+def message(at, cid):
+    return next(t.value for t in at.text_area if t.key == f"msg_{cid}")
+
+
+def remind_links(at):
+    return [b for b in at.get("link_button") if "Remind on WhatsApp" in b.proto.label]
+
+
+def test_reminder_ready_without_extra_click_and_updates_after_payment():
     at = replay_and_confirm(new_app(), "Roman Urdu page")
+    assert "Rs. 400" in message(at, "ali bhai") and "Bismillah General Store" in message(at, "ali bhai")
+    # owner edits the wording, then a payment arrives
+    next(t for t in at.text_area if t.key == "msg_ali bhai").set_value("Ali bhai, Rs. 400 baqaya hai. Shukriya").run()
     ali = next(i for i, e in enumerate(at.expander) if "Ali bhai" in e.label)
-    next(b for b in at.button if b.key == "prep_ali bhai").click().run()
-    assert any("400" in t.value for t in at.text_area)
     [t for t in at.text_input if t.label == "Amount (Rs.)"][ali].set_value("100")
     [b for b in at.button if "Record payment" in b.label][ali].click().run()
-    assert not any("400" in t.value for t in at.text_area), "stale 400 draft still visible"
-    assert any("Ali bhai" in e.label and "300" in e.label for e in at.expander)
+    assert "Rs. 300" in message(at, "ali bhai") and "400" not in message(at, "ali bhai"), "stale 400 message"
+    assert any("message was rewritten" in c.value for c in at.caption)
 
 
-def test_business_change_invalidates_draft():
+def test_edited_message_with_wrong_amount_disables_button():
     at = replay_and_confirm(new_app(), "Roman Urdu page")
-    [b for b in at.button if "Prepare draft" in b.label][0].click().run()
-    assert at.text_area
+    before = len(remind_links(at))
+    next(t for t in at.text_area if t.key == "msg_ali bhai").set_value("Ali bhai, Rs. 900 baqaya hai").run()
+    assert any("approved balance is Rs. 400" in e.value for e in at.error)
+    assert len(remind_links(at)) == before - 1
+
+
+def test_business_change_rewrites_message():
+    at = replay_and_confirm(new_app(), "Roman Urdu page")
+    assert "Bismillah General Store" in message(at, "usman")
     next(t for t in at.text_input if t.label == "Shop / academy name").set_value("New Shop").run()
-    assert not at.text_area, "draft for the old shop name is still shown"
+    assert "New Shop" in message(at, "usman") and "Bismillah" not in message(at, "usman")
+
+
+def test_save_whatsapp_number_validation_and_link():
+    at = replay_and_confirm(new_app(), "Roman Urdu page")
+    usman = next(i for i, e in enumerate(at.expander) if "Usman" in e.label)
+    phone_inputs = [t for t in at.text_input if t.label == "WhatsApp number"]
+    save_buttons = [b for b in at.button if "Save number" in b.label]
+    phone_inputs[0].set_value("12345")          # Usman is the first due customer
+    save_buttons[0].click().run()
+    assert any("Pakistani mobile number" in e.value for e in at.error)
+    [t for t in at.text_input if t.label == "WhatsApp number"][0].set_value("0300-1234567")
+    [b for b in at.button if "Save number" in b.label][0].click().run()
+    assert any("+92 300 1234567" in s.value for s in at.success)
+    link = next(b for b in remind_links(at) if "+92 300 1234567" in b.proto.label)
+    assert link.proto.url.startswith("https://wa.me/923001234567?text=") and "3%2C550" in link.proto.url
+    assert usman == 0
+
+
+def test_overdue_only_after_confirmed_due_date():
+    from datetime import date, timedelta
+    at = replay_and_confirm(new_app(), "Roman Urdu page")
+    assert not any("Overdue" in e.label for e in at.expander)  # no due date saved yet
+    [d for d in at.date_input if d.label == "Due date (optional)"][0].set_value(date.today() - timedelta(days=3))
+    [b for b in at.button if "Save number" in b.label][0].click().run()
+    assert any("Overdue" in e.label and "Usman" in e.label for e in at.expander)
+    assert not any("Overdue" in e.label and "Ali bhai" in e.label for e in at.expander)
 
 
 def test_confirm_with_unclear_rows_keeps_them_pending_and_fixable():
@@ -105,7 +147,8 @@ def test_confirm_with_unclear_rows_keeps_them_pending_and_fixable():
     confirm.click().run()
     assert metric(at, "Total to collect") == "Rs. 900"   # Hina's unknown amount is not counted
     assert metric(at, "Rows to check") == "1"
-    assert not any(b.key == "prep_hina" for b in at.button)  # no reminder for an unchecked customer
+    assert not any(t.key == "msg_hina" for t in at.text_area)  # no reminder for an uncertain amount
+    assert any("unlocks once you fix" in i.value for i in at.info)
     fix_amount = next(t for t in at.text_input if t.label == "Amount (Rs.)" and "unreadable" in t.value)
     fix_amount.set_value("750")
     button(at, "Save fix").click().run()
@@ -130,7 +173,8 @@ def test_payment_feedback_and_overpayment_shows_credit():
     [b for b in at.button if "Record payment" in b.label][ali].click().run()
     assert any("Rs. 100 more than they owed" in s.value for s in at.success)
     assert any("Ali bhai" in e.label and "Credit" in e.label for e in at.expander)
-    assert not any(b.key == "prep_ali bhai" for b in at.button)  # no reminder to a customer in credit
+    assert not any(t.key == "msg_ali bhai" for t in at.text_area)  # no reminder to a customer in credit
+    assert not any(t.key == "msg_bilal" for t in at.text_area)     # nor to a settled one
 
 
 def test_confirmed_page_review_is_locked():
